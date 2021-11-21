@@ -1,9 +1,15 @@
 import multiprocessing
-import gym
 import torch
+import torch.nn as nn
+from torch.optim import Adam
+from A3C_ import ActorCritic
+from A3C_ import get_action_space, get_actions
+import gym
 
 from multiprocessing import Process, Pipe
 from A3C_ import EnvironmentWrapper
+
+# 동기적 Actor Critic
 
 def worker(connection, stack_size):
     env = make_environment(stack_size)
@@ -94,13 +100,6 @@ class Storage:
             expected_rewards[step] = self.rewards[step] + \
                                      expected_rewards[step + 1] * discount_factor * (1.0 - self.dones[step])
         return expected_rewards[:-1]
-
-import multiprocessing
-import torch
-import torch.nn as nn
-from torch.optim import Adam
-from A3C_ import ActorCritic
-from A3C_ import get_action_space, get_actions
 
 class A2CTrainer:
     def __init__(self, params, model_path):

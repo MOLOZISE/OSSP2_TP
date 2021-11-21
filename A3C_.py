@@ -9,6 +9,8 @@ from utils.image_utils import to_grayscale, zero_center, crop
 from torch.optim import Adam
 import torch.nn.functional as F
 
+# 비동기적 Actor Critic
+
 LEFT = [-1.0, 0.0, 0.0]
 RIGHT = [1.0, 0.0, 0.0]
 GAS = [0.0, 1.0, 0.0]
@@ -16,6 +18,32 @@ BRAKE = [0.0, 0.0, 1.0]
 
 ACTIONS = [LEFT, RIGHT, GAS, BRAKE]
 
+# Actor Critic building : 생성자, forward 함수 정의
+class ActorCritic(nn.Module):
+    def __init__(self, num_of_inputs, num_of_actions):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(num_of_inputs, 16, 8, stride=4)
+        self.conv2 = nn.Conv2d(16, 32, 3, stride=2)
+        self.linear1 = nn.Linear(32*9*9, 256)
+        self.policy = nn.Linear(256, num_of_actions)
+        self.value = nn.Linear(256, 1)
+
+    def forward(self, x):
+        conv1_out = F.relu(self.conv1(x))
+        conv2_out = F.relu(self.conv2(conv1_out))
+
+        flattened = torch.flatten(conv2_out, start_dim=1)  # N x 9*9*32
+        linear1_out = self.linear1(flattened)
+
+        policy_output = self.policy(linear1_out)
+        value_output = self.value(linear1_out)
+
+        probs = F.softmax(policy_output)
+        log_probs = F.log_softmax(policy_output)
+        return probs, log_probs, value_output
+
+# A3CTrainer : multiprocessing 사용, Module.sharing memory, 각 Worker를 이용하여 프로세스 생성 및 실행
 class A3CTrainer:
     def __init__(self, params, model_path):
         self.params = params
@@ -37,8 +65,8 @@ class A3CTrainer:
 
         torch.save(self.global_model.state_dict(), self.model_path)
 
+# 경험 저장 메모리
 class Storage:
-
     def __init__(self, steps_per_update):
         self.steps_per_update = steps_per_update
         self.reset_storage()
@@ -57,6 +85,7 @@ class Storage:
         self.entropies[step] = entropy
         self.dones[step] = done
 
+    # dymanic programming을 위한 역 계산
     def compute_expected_reward(self, last_value, discount_factor):
         expected_reward = torch.zeros(self.steps_per_update + 1, 1)
         expected_reward[-1] = last_value
@@ -65,6 +94,7 @@ class Storage:
                                     expected_reward[step + 1] * discount_factor * (1.0 - self.dones[step])
         return expected_reward[:-1]
 
+    # general advantage estimation
     def compute_gae(self, last_value, discount_factor, gae_coef):
         gae = torch.zeros(self.steps_per_update + 1, 1)
         next_value = last_value
@@ -74,43 +104,62 @@ class Storage:
             next_value = self.values[step]
         return gae[:-1]
 
+# 각 Process별로 run
 class Worker(mp.Process):
     def __init__(self, process_num, global_model, params):
         super().__init__()
-
+        # Worker 변수
         self.process_num = process_num
         self.global_model = global_model
+        # Model 변수
         self.params = params
+        # Environment
         env = gym.make('CarRacing-v0')
+        # EnvironmentWrapper
         self.environment = EnvironmentWrapper(env, self.params.stack_size)
+        # AC 모델
         self.model = ActorCritic(self.params.stack_size, get_action_space())
+        # Optimizer
         self.optimizer = Adam(self.global_model.parameters(), lr=self.params.lr)
+        # 기억 저장 메모리
         self.storage = Storage(self.params.steps_per_update)
+        # 현재 observation
         self.current_observation = torch.zeros(1, *self.environment.get_state_shape())
 
     def run(self):
+        # update 단위 횟수 (rollout)
         num_of_updates = self.params.num_of_steps / self.params.steps_per_update
+        # 현재 observation
         self.current_observation = torch.Tensor([self.environment.reset()])
 
         for update in range(int(num_of_updates)):
+            # reset memory
             self.storage.reset_storage()
             # synchronize with global model
             self.model.load_state_dict(self.global_model.state_dict())
             for step in range(self.params.steps_per_update):
+                # model은 softmax probs, log_softmax probs, value(estimated)을 forwarding
                 probs, log_probs, value = self.model(self.current_observation)
+                # softmax된 probs에 대한 action 선택 -> max값
                 action = get_actions(probs)[0]
                 action_log_prob, entropy = self.compute_action_log_and_entropy(probs, log_probs)
-
+                # environment Wrapper
                 state, reward, done = self.environment.step(action)
                 if done:
                     state = self.environment.reset()
+                # on torch
                 done = torch.Tensor([done])
                 self.current_observation = torch.Tensor([state])
+                # storage save
                 self.storage.add(step, value, reward, action_log_prob, entropy, done)
 
+            # rollout 횟수 종료 후
+            # last_value 값 얻기
             _, _, last_value = self.model(self.current_observation)
+            # 각 경험에서의 expected_reward가 계산
             expected_reward = self.storage.compute_expected_reward(last_value,
                                                                    self.params.discount_factor)
+            # A = TD Target - Value
             advantages = torch.tensor(expected_reward) - self.storage.values
             value_loss = advantages.pow(2).mean()
             if self.params.use_gae:
@@ -122,9 +171,11 @@ class Worker(mp.Process):
                 policy_loss = -(advantages * self.storage.action_log_probs).mean()
 
             self.optimizer.zero_grad()
+            # policy_loss, maximum entropy Inverse reinforcement Leaning, value loss
             loss = policy_loss - self.params.entropy_coef * self.storage.entropies.mean() + \
                 self.params.value_loss_coef * value_loss
             loss.backward()
+            # cliping grad
             nn.utils.clip_grad_norm(self.model.parameters(), self.params.max_norm)
             self._share_gradients()
             self.optimizer.step()
@@ -159,30 +210,7 @@ def get_actions(probs):
         actions[i] = float(values[i]) * np.array(action)
     return actions
 
-class ActorCritic(nn.Module):
-    def __init__(self, num_of_inputs, num_of_actions):
-        super().__init__()
-
-        self.conv1 = nn.Conv2d(num_of_inputs, 16, 8, stride=4)
-        self.conv2 = nn.Conv2d(16, 32, 3, stride=2)
-        self.linear1 = nn.Linear(32*9*9, 256)
-        self.policy = nn.Linear(256, num_of_actions)
-        self.value = nn.Linear(256, 1)
-
-    def forward(self, x):
-        conv1_out = F.relu(self.conv1(x))
-        conv2_out = F.relu(self.conv2(conv1_out))
-
-        flattened = torch.flatten(conv2_out, start_dim=1)  # N x 9*9*32
-        linear1_out = self.linear1(flattened)
-
-        policy_output = self.policy(linear1_out)
-        value_output = self.value(linear1_out)
-
-        probs = F.softmax(policy_output)
-        log_probs = F.log_softmax(policy_output)
-        return probs, log_probs, value_output
-
+# openai gym의 wrapper 활용?
 class EnvironmentWrapper(gym.Wrapper):
     def __init__(self, env, stack_size):
         super().__init__(env)
@@ -215,6 +243,7 @@ class EnvironmentWrapper(gym.Wrapper):
     def get_state_shape(self):
         return (self.stack_size, 84, 84)
 
+# AC loading + gym에서 episode -> testing
 def evaluate_actor_critic(params, path):
     model = ActorCritic(params.stack_size, get_action_space())
     model.load_state_dict(torch.load(path))
@@ -242,6 +271,7 @@ def evaluate_actor_critic(params, path):
         total_reward += score
     return total_reward / num_of_episodes
 
+# 1번의 episode 진행
 def actor_critic_inference(params, path):
     model = ActorCritic(params.stack_size, get_action_space())
     model.load_state_dict(torch.load(path))
