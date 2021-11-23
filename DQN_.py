@@ -223,7 +223,7 @@ class DQNTrainer:
         dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
 
         q_values = self.current_q_net(states).gather(1, actions)                               # q(s, a)
-        next_q_values = self.target_q_net(next_states).max(1)[0]                               # q*(s, a)
+        next_q_values = self.target_q_net(next_states).max(1)[0]                               # q'(s', a')
 
         expected_q_values = rewards + self.params.discount_factor * next_q_values * (1 - dones)
         loss = F.smooth_l1_loss(q_values, expected_q_values.unsqueeze(1))
