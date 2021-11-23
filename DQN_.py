@@ -67,7 +67,7 @@ class DQN(nn.Module):                                                           
         self.batch_norm3 = nn.BatchNorm2d(32)
 
         self.linear1 = nn.Linear(32*7*7, 256)                                                  # 32*7*7 -> 256 -> num_of_actions
-        self.linear2 = nn.Linear(256, num_of_actions)
+        self.linear2 = nn.Linear(256, num_of_actions)                                          # 7*7은 image size로 추정
 
     def forward(self, x):
         conv1_out = F.relu(self.batch_norm1(self.conv1(x)))
