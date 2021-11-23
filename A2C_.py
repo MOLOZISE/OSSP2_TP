@@ -10,7 +10,7 @@ def worker(connection, stack_size):
 
     while True:
         command, data = connection.recv()                                                           # 들어온 connection 데이터에 따라 학습을 진행
-        if command == 'step':                                                                       
+        if command == 'step':
             state, reward, done = env.step(data)
             if done:
                 state = env.reset()
