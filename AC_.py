@@ -7,7 +7,7 @@ import torch.nn as nn
 import numpy as np
 from PIL import Image
 from collections import deque
-from utils.image_utils import to_grayscale, zero_center, crop
+#from utils.image_utils import to_grayscale, zero_center, crop
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -31,41 +31,49 @@ def get_actions(probs):
         actions[i] = float(values[i]) * np.array(action)
     return actions
 
-# openai gym의 wrapper 활용?
-class EnvironmentWrapper(gym.Wrapper):
-    def __init__(self, env, stack_size):
-        super().__init__(env)
-        self.stack_size = stack_size
-        self.frames = deque([], maxlen=stack_size)
+# 경험 저장 메모리
+class A2CStorage:
 
-    def reset(self):
-        state = self.env.reset()
-        for _ in range(self.stack_size):
-            self.frames.append(self.preprocess(state))
-        return self.state()
+    def __init__(self, steps_per_update, num_of_processes):
+        self.steps_per_update = steps_per_update
+        self.num_of_processes = num_of_processes
+        self.reset_storage()
 
-    def step(self, action):
-        state, reward, done, _ = self.env.step(action)
-        self.env.env.viewer.window.dispatch_events()
-        preprocessed_state = self.preprocess(state)
+    def reset_storage(self):                                                                        # Storage 초기화
+        self.values = torch.zeros(self.steps_per_update,
+                                  self.num_of_processes,
+                                  1)
+        self.rewards = torch.zeros(self.steps_per_update,
+                                   self.num_of_processes,
+                                   1)
+        self.action_log_probs = torch.zeros(self.steps_per_update,
+                                            self.num_of_processes,
+                                            1)
+        self.entropies = torch.zeros(self.steps_per_update,
+                                     self.num_of_processes)
+        self.dones = torch.zeros(self.steps_per_update,
+                                 self.num_of_processes,
+                                 1)
 
-        self.frames.append(preprocessed_state)
-        return self.state(), reward, done
+    def add(self, step, values, rewards, action_log_probs, entropies, dones):                      # Storage 추가
+        self.values[step] = values
+        self.rewards[step] = rewards
+        self.action_log_probs[step] = action_log_probs
+        self.entropies[step] = entropies
+        self.dones[step] = dones
 
-    def state(self):
-        return np.stack(self.frames, axis=0)
-
-    def preprocess(self, state):
-        preprocessed_state = to_grayscale(state)
-        preprocessed_state = zero_center(preprocessed_state)
-        preprocessed_state = crop(preprocessed_state)
-        return preprocessed_state
-
-    def get_state_shape(self):
-        return (self.stack_size, 84, 84)
+    def compute_expected_rewards(self, last_values, discount_factor):
+        expected_rewards = torch.zeros(self.steps_per_update + 1,
+                                       self.num_of_processes,
+                                       1)
+        expected_rewards[-1] = last_values
+        for step in reversed(range(self.rewards.size(0))):                                         # reward 계산 후 저장
+            expected_rewards[step] = self.rewards[step] + \
+                                     expected_rewards[step + 1] * discount_factor * (1.0 - self.dones[step])
+        return expected_rewards[:-1]
 
 # 경험 저장 메모리
-class Storage:
+class A3CStorage:
     def __init__(self, steps_per_update):
         self.steps_per_update = steps_per_update
         self.reset_storage()
@@ -128,14 +136,9 @@ class ActorCritic(nn.Module):
         log_probs = F.log_softmax(policy_output)
         return probs, log_probs, value_output
 
-def make_environment(stack_size):
-    env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, stack_size)
-    return env_wrapper
-
 # 동기적 Actor Critic
 def worker(connection, stack_size):
-    env = make_environment(stack_size)
+    env = gym.make('CarRacing-v0')
 
     while True:
         command, data = connection.recv()
@@ -254,7 +257,7 @@ class Worker(mp.Process):
         # Environment
         env = gym.make('CarRacing-v0')
         # EnvironmentWrapper
-        self.environment = EnvironmentWrapper(env, self.params.stack_size)
+        self.environment = env
         # AC 모델
         self.model = ActorCritic(self.params.stack_size, get_action_space())
         # Optimizer
@@ -262,7 +265,7 @@ class Worker(mp.Process):
         # 기억 저장 메모리
         self.storage = Storage(self.params.steps_per_update)
         # 현재 observation
-        self.current_observation = torch.zeros(1, *self.environment.get_state_shape())
+        #self.current_observation = torch.zeros(1, *self.environment.get_state_shape())
 
     def run(self):
         # update 단위 횟수 (rollout)
@@ -366,23 +369,22 @@ def evaluate_actor_critic(params, path):
     model.eval()
 
     env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, params.stack_size)
 
     total_reward = 0
     num_of_episodes = 100
 
     for episode in range(num_of_episodes):
-        state = env_wrapper.reset()
+        state = env.reset()
         state = torch.Tensor([state])
         done = False
         score = 0
         while not done:
             probs, _, _ = model(state)
             action = get_actions(probs)
-            state, reward, done = env_wrapper.step(action[0])
+            state, reward, done = env.step(action[0])
             state = torch.Tensor([state])
             score += reward
-            env_wrapper.render()
+            env.render()
         print('Episode: {0} Score: {1:.2f}'.format(episode, score))
         total_reward += score
     return total_reward / num_of_episodes
@@ -394,9 +396,8 @@ def actor_critic_inference(params, path):
     model.eval()
 
     env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, params.stack_size)
 
-    state = env_wrapper.reset()
+    state = env.reset()
     state = torch.Tensor([state])
     done = False
     total_score = 0
@@ -404,9 +405,9 @@ def actor_critic_inference(params, path):
         probs, _, _ = model(state)
         action = get_actions(probs)
         print(action)
-        state, reward, done = env_wrapper.step(action[0])
+        state, reward, done = env.step(action[0])
         state = torch.Tensor([state])
         total_score += reward
-        env_wrapper.render()
+        env.render()
     return total_score
 
