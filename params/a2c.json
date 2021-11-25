@@ -5,6 +5,9 @@
     "value_loss_coef": 0.5,
     "entropy_coef": 0.1,
     "max_norm": 0.5,
-    "num_of_steps": 100000,
-    "steps_per_update": 1000
+    "num_of_steps": 10000,
+    "steps_per_update": 100,
+    "epsilon_start": 0.9,
+    "epsilon_final": 0.05,
+    "epsilon_step": 5000
 }

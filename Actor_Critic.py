@@ -10,6 +10,9 @@ from collections import deque
 from utils.image_utils import to_grayscale, zero_center, crop
 from torch.optim import Adam
 import torch.nn.functional as F
+###
+import math
+import random
 
 # Battlezone https://github.com/mgbellemare/Arcade-Learning-Environment
 
@@ -267,21 +270,19 @@ class A2CTrainer:
             expected_rewards = self.storage.compute_expected_rewards(last_values,
                                                                      self.params.discount_factor)
             advantages = torch.tensor(expected_rewards) - self.storage.values
-            value_loss = advantages.pow(2).mean()
+            value_loss = advantages.mean()
             policy_loss = -(advantages * self.storage.action_log_probs).mean()
 
             self.optimizer.zero_grad()
             loss = policy_loss - self.params.entropy_coef * self.storage.entropies.mean() + \
                 self.params.value_loss_coef * value_loss
             loss.backward(retain_graph=True)
-            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.params.max_norm)
+            #nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.params.max_norm)
             self.optimizer.step()
 
-            if update % 300 == 0:
-                torch.save(self.actor_critic.state_dict(), self.model_path)
-
-            if update % 100 == 0:
+            if update % 20 == 0:
                 print('Update: {}. Loss: {}'.format(update, loss))
+                torch.save(self.actor_critic.state_dict(), self.model_path)
 
     def compute_action_logs_and_entropies(self, probs, log_probs):
         values, indices = probs.max(1)
@@ -367,7 +368,7 @@ class Worker(mp.Process):
                                                                    self.params.discount_factor)
             # A = TD Target - Value
             advantages = torch.tensor(expected_reward) - self.storage.values
-            value_loss = advantages.pow(2).mean()
+            value_loss = advantages.mean()
             if self.params.use_gae:
                 gae = self.storage.compute_gae(last_value,
                                                self.params.discount_factor,
@@ -382,7 +383,7 @@ class Worker(mp.Process):
                 self.params.value_loss_coef * value_loss
             loss.backward()
             # cliping grad
-            nn.utils.clip_grad_norm(self.model.parameters(), self.params.max_norm)
+            #nn.utils.clip_grad_norm(self.model.parameters(), self.params.max_norm)
             self._share_gradients()
             self.optimizer.step()
 
@@ -448,7 +449,7 @@ def evaluate_actor_critic(params, path):
         while not done:
             probs, _, _ = model(state)
             action = get_actions(probs)
-            state, reward, done = env_wrapper.step(action[0])
+            state, reward, done = env_wrapper.step(action)
             state = torch.Tensor([state])
             score += reward
             env_wrapper.render()
@@ -473,7 +474,7 @@ def actor_critic_inference(params, path):
         probs, _, _ = model(state)
         action = get_actions(probs)
         print(action)
-        state, reward, done = env_wrapper.step(action[0])
+        state, reward, done = env_wrapper.step(action)
         state = torch.Tensor([state])
         total_score += reward
         env_wrapper.render()
