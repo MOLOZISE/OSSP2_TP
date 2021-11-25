@@ -31,39 +31,6 @@ def get_actions(probs):
         actions[i] = float(values[i]) * np.array(action)
     return actions
 
-# openai gym의 wrapper 활용?
-class EnvironmentWrapper(gym.Wrapper):
-    def __init__(self, env, stack_size):
-        super().__init__(env)
-        self.stack_size = stack_size
-        self.frames = deque([], maxlen=stack_size)
-
-    def reset(self):
-        state = self.env.reset()
-        for _ in range(self.stack_size):
-            self.frames.append(self.preprocess(state))
-        return self.state()
-
-    def step(self, action):
-        state, reward, done, _ = self.env.step(action)
-        self.env.env.viewer.window.dispatch_events()
-        preprocessed_state = self.preprocess(state)
-
-        self.frames.append(preprocessed_state)
-        return self.state(), reward, done
-
-    def state(self):
-        return np.stack(self.frames, axis=0)
-
-    def preprocess(self, state):
-        preprocessed_state = to_grayscale(state)
-        preprocessed_state = zero_center(preprocessed_state)
-        preprocessed_state = crop(preprocessed_state)
-        return preprocessed_state
-
-    def get_state_shape(self):
-        return (self.stack_size, 84, 84)
-
 # 경험 저장 메모리
 class A2CStorage:
 
@@ -146,31 +113,58 @@ class A3CStorage:
 
 # Actor Critic building : 생성자, forward 함수 정의
 class ActorCritic(nn.Module):
-    def __init__(self, num_of_inputs, num_of_actions):
+    def __init__(self, num_of_inputs=3, num_of_actions=4):
         super().__init__()
+        # input_channel_size(RGB...), output_volume_size(Arbitary), filter_size, padding, stride
+        # output size = (input_volume_size - kernel_size + 2 * padding_size) / strides + 1
+        # input_volume_size = image width
+        # maxpooling 2 -> input_filter_size / 2 = output_filter_size
 
-        self.conv1 = nn.Conv2d(num_of_inputs, 16, kernel_size=5, stride=2)  # input_shape -> 16 -> 32 -> 32
-        self.batch_norm1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.batch_norm2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.batch_norm3 = nn.BatchNorm2d(32)
+        # L1 ImgIn shape = (?, 96, 96, 3)
+        # conv           = (?, 96, 96, 32)
+        # pooling        = (?, 48, 48, 32)
+        self.convlayer1 = torch.nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
 
-        self.linear1 = nn.Linear(32 * 7 * 7, 256)  # 32*7*7 -> 256 -> num_of_actions
-        self.policy = nn.Linear(256, num_of_actions)
-        self.value = nn.Linear(256, 1)
+        # L2 ImgIn shape = (?, 48, 48, 32)
+        # conv           = (?, 48, 48, 64)
+        # pooling        = (?, 24, 24, 64)
+        self.convlayer2 = torch.nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+
+        # L3 ImgIn shape = (?, 24, 24, 64)
+        # conv           = (?, 24, 24, 128)
+        # pooling        = (?, 12, 12, 128)
+        self.convlayer3 = torch.nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.fc1 = nn.Linear(12 * 12 * 128, 4096, bias=True)
+        nn.init.xavier_uniform_(self.fc1.weight)
+        self.fc2 = nn.Linear(4096, 1024, bias=True)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        self.policy = nn.Linear(1024, num_of_actions, bias=True)
+        nn.init.xavier_uniform_(self.policy.weight)
+        self.value = nn.Linear(1024, 1, bias=True)
+        nn.init.xavier_uniform_(self.value.weight)
 
     def forward(self, x):
-        conv1_out = F.relu(self.batch_norm1(self.conv1(x)))
-        conv2_out = F.relu(self.batch_norm2(self.conv2(conv1_out)))
-        conv3_out = F.relu(self.batch_norm3(self.conv3(conv2_out)))
-
-        flattened = torch.flatten(conv3_out, start_dim=1)
-
-        linear1_out = self.linear1(flattened)
-
-        policy_output = self.policy(linear1_out)
-        value_output = self.value(linear1_out)
+        x = x.permute(0, 3, 1, 2)
+        conv1_out = self.convlayer1(x)
+        conv2_out = self.convlayer2(conv1_out)
+        conv3_out = self.convlayer3(conv2_out)
+        flattened = conv3_out.view(conv3_out.size(0), -1)
+        linear1_out = self.fc1(flattened)
+        linear2_out = self.fc2(linear1_out)
+        policy_output = self.policy(linear2_out)
+        value_output = self.value(linear2_out)
 
         probs = F.softmax(policy_output)
         log_probs = F.log_softmax(policy_output)
@@ -178,8 +172,8 @@ class ActorCritic(nn.Module):
 
 def make_environment(stack_size):
     env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, stack_size)
-    return env_wrapper
+    #env_wrapper = EnvironmentWrapper(env, stack_size)
+    return env
 
 # 동기적 Actor Critic
 def worker(connection, stack_size):
@@ -190,8 +184,9 @@ def worker(connection, stack_size):
 
     while True:
         command, data = connection.recv()
+        #env.render()
         if command == 'step':
-            state, reward, done = env.step(data)
+            state, reward, done, _ = env.step(data)
             if done:
                 state = env.reset()
             connection.send((state, reward, done))
@@ -228,7 +223,8 @@ class ParallelEnvironments:
         return torch.Tensor(results)
 
     def get_state_shape(self):
-        return (self.stack_size, 84, 84)
+        #return (self.stack_size, 84, 84)
+        return (3, 96, 96)
 
 class A2CTrainer:
     def __init__(self, params, model_path):
@@ -237,7 +233,7 @@ class A2CTrainer:
         self.num_of_processes = 4
         self.parallel_environments = ParallelEnvironments(self.params.stack_size,
                                                           number_of_processes=self.num_of_processes)
-        self.actor_critic = ActorCritic(self.params.stack_size, get_action_space()) # 5, 4
+        self.actor_critic = ActorCritic(3, get_action_space()) # 5, 4
         self.optimizer = Adam(self.actor_critic.parameters(), lr=self.params.lr)
         self.storage = A2CStorage(self.params.steps_per_update, self.num_of_processes)
         self.current_observations = torch.zeros(self.num_of_processes,
@@ -248,7 +244,7 @@ class A2CTrainer:
         num_of_updates = self.params.num_of_steps / self.params.steps_per_update
         self.current_observations = self.parallel_environments.reset()
 
-        print(self.current_observations.size()) # 16 5 84 84
+        print(self.current_observations.size()) # 16 5 84 84 ->
 
         for update in range(int(num_of_updates)):
             self.storage.reset_storage()
@@ -266,7 +262,7 @@ class A2CTrainer:
             _, _, last_values = self.actor_critic(self.current_observations)
             expected_rewards = self.storage.compute_expected_rewards(last_values,
                                                                      self.params.discount_factor)
-            advantages = torch.tensor(expected_rewards) - self.storage.values
+            advantages = expected_rewards.clone().detach() - self.storage.values
             value_loss = advantages.pow(2).mean()
             policy_loss = -(advantages * self.storage.action_log_probs).mean()
 
@@ -277,10 +273,10 @@ class A2CTrainer:
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.params.max_norm)
             self.optimizer.step()
 
-            if update % 300 == 0:
+            if update % 10 == 0:
                 torch.save(self.actor_critic.state_dict(), self.model_path)
 
-            if update % 100 == 0:
+            if update % 10 == 0:
                 print('Update: {}. Loss: {}'.format(update, loss))
 
     def compute_action_logs_and_entropies(self, probs, log_probs):
@@ -295,14 +291,13 @@ class A2CTrainer:
 # 비동기적 Actor Critic
 # 각 Process별로 run
 class Worker(mp.Process):
-    def __init__(self, process_num, global_model, params, model_path):
+    def __init__(self, process_num, global_model, params):
         super().__init__()
         # Worker 변수
         self.process_num = process_num
         self.global_model = global_model
         # Model 변수
         self.params = params
-        self.model_path = model_path
         # # Environment
         # env = gym.make('CarRacing-v0')
         # ####
@@ -314,7 +309,7 @@ class Worker(mp.Process):
         # #self.environment.env.reset()
         # ####
         # AC 모델
-        self.model = ActorCritic(self.params.stack_size, get_action_space())
+        self.model = ActorCritic(3, get_action_space())
         # Optimizer
         self.optimizer = Adam(self.global_model.parameters(), lr=self.params.lr)
         # 기억 저장 메모리
@@ -329,7 +324,7 @@ class Worker(mp.Process):
         # env.reset()
         ####
         # EnvironmentWrapper
-        self.environment = EnvironmentWrapper(env, self.params.stack_size)
+        self.environment = env
         ####
         # self.environment.env.reset()
         ####
@@ -350,7 +345,7 @@ class Worker(mp.Process):
                 action = get_actions(probs)[0]
                 action_log_prob, entropy = self.compute_action_log_and_entropy(probs, log_probs)
                 # environment Wrapper
-                state, reward, done = self.environment.step(action)
+                state, reward, done, _ = self.environment.step(action)
                 if done:
                     state = self.environment.reset()
                 # on torch
@@ -366,7 +361,7 @@ class Worker(mp.Process):
             expected_reward = self.storage.compute_expected_reward(last_value,
                                                                    self.params.discount_factor)
             # A = TD Target - Value
-            advantages = torch.tensor(expected_reward) - self.storage.values
+            advantages = torch.tensor(expected_reward.clone().detach()) - self.storage.values
             value_loss = advantages.pow(2).mean()
             if self.params.use_gae:
                 gae = self.storage.compute_gae(last_value,
@@ -386,11 +381,10 @@ class Worker(mp.Process):
             self._share_gradients()
             self.optimizer.step()
 
-            if update % 20 == 0:
+            if update % 10 == 0:
                 print('Process: {}. Update: {}. Loss: {}'.format(self.process_num,
                                                                  update,
                                                                  loss))
-                torch.save(self.global_model.state_dict(), self.model_path)
 
     def compute_action_log_and_entropy(self, probs, log_probs):
         values, indices = probs.max(1)
@@ -412,14 +406,14 @@ class A3CTrainer:
         self.params = params
         self.model_path = model_path
         self.num_of_processes = 4
-        self.global_model = ActorCritic(self.params.stack_size,
+        self.global_model = ActorCritic(3,
                                         get_action_space())
         self.global_model.share_memory()
 
     def run(self):
         processes = []
         for process_num in range(self.num_of_processes):
-            worker = Worker(process_num, self.global_model, self.params, self.model_path)
+            worker = Worker(process_num, self.global_model, self.params)
             processes.append(worker)
             worker.start()
 
@@ -435,7 +429,7 @@ def evaluate_actor_critic(params, path):
     model.eval()
 
     env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, params.stack_size)
+    env_wrapper = env
 
     total_reward = 0
     num_of_episodes = 100
@@ -448,7 +442,7 @@ def evaluate_actor_critic(params, path):
         while not done:
             probs, _, _ = model(state)
             action = get_actions(probs)
-            state, reward, done = env_wrapper.step(action[0])
+            state, reward, done, _ = env_wrapper.step(action[0])
             state = torch.Tensor([state])
             score += reward
             env_wrapper.render()
@@ -463,7 +457,7 @@ def actor_critic_inference(params, path):
     model.eval()
 
     env = gym.make('CarRacing-v0')
-    env_wrapper = EnvironmentWrapper(env, params.stack_size)
+    env_wrapper = env
 
     state = env_wrapper.reset()
     state = torch.Tensor([state])
@@ -472,8 +466,8 @@ def actor_critic_inference(params, path):
     while not done:
         probs, _, _ = model(state)
         action = get_actions(probs)
-        print(action)
-        state, reward, done = env_wrapper.step(action[0])
+        #print(action)
+        state, reward, done, _ = env_wrapper.step(action[0])
         state = torch.Tensor([state])
         total_score += reward
         env_wrapper.render()

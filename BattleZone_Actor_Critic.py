@@ -13,12 +13,6 @@ import torch.nn.functional as F
 
 # Battlezone https://github.com/mgbellemare/Arcade-Learning-Environment
 
-LEFT = [-1.0, 0.0, 0.0]
-RIGHT = [1.0, 0.0, 0.0]
-GAS = [0.0, 1.0, 0.0]
-BRAKE = [0.0, 0.0, 1.0]
-
-#ACTIONS = [LEFT, RIGHT, GAS, BRAKE]
 ACTIONS = {"NOOP" : 0,
            "FIRE" : 1,
            "UP" : 2,
@@ -43,12 +37,6 @@ def get_action_space():
     return len(ACTIONS)
 
 def get_actions(probs):
-    # values, indices = probs.max(1)
-    # actions = np.zeros((probs.size(0), 3))
-    # for i in range(probs.size(0)):
-    #     action = ACTIONS[indices[i]]
-    #     actions[i] = float(values[i]) * np.array(action)
-    #return actions
     actions = np.argmax(probs)
     return [actions]
 
@@ -77,9 +65,11 @@ class EnvironmentWrapper(gym.Wrapper):
         return np.stack(self.frames, axis=0)
 
     def preprocess(self, state):
+        print(state.shape())
         preprocessed_state = to_grayscale(state)
         preprocessed_state = zero_center(preprocessed_state)
         preprocessed_state = crop(preprocessed_state)
+        print(preprocessed_state.shape())
         return preprocessed_state
 
     def get_state_shape(self):

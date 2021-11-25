@@ -210,7 +210,7 @@ class DQNTrainer:
                 print('Update: {}. Loss: {}'.format(step, loss))
             if step % self.params.target_update_freq == 0:                                     # 일정 횟수 step 진행 시 target network 갱신
                 self._update_target_q_net()
-        torch.save(self.target_q_net.state_dict(), self.model_path)
+            torch.save(self.target_q_net.state_dict(), self.model_path)
 
     def _update_current_q_net(self):
         batch = self.replay_memory.sample(self.params.batch_size)                              # 메모리에서 랜덤하게 선택

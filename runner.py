@@ -1,18 +1,24 @@
 import argparse
-from Actor_Critic import A3CTrainer
-from Actor_Critic import A2CTrainer
-from Actor_Critic import actor_critic_inference
-from Actor_Critic import evaluate_actor_critic
+
 # from AC_ import A3CTrainer
 # from AC_ import A2CTrainer
 # from AC_ import actor_critic_inference
 # from AC_ import evaluate_actor_critic
+from Actor_Critic import A3CTrainer
+from Actor_Critic import A2CTrainer
+from Actor_Critic import actor_critic_inference
+from Actor_Critic import evaluate_actor_critic
+# from DQN_base import DQNTrainer
+# from DQN_base import dqn_inference
+# from DQN_base import evaluate_dqn
 from DQN_ import DQNTrainer
 from DQN_ import dqn_inference
 from DQN_ import evaluate_dqn
 from params import Params
 
 # RGB 210, 160, 3 k frame uniformly sampled {2, 3, 4}
+
+## https://github.com/AppliedDataSciencePartners/WorldModels
 
 def get_trainer(model_type, params):
     model_path = 'models/' + model_type + '.pt'

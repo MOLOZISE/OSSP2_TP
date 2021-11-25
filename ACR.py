@@ -149,24 +149,17 @@ class ActorCritic(nn.Module):
     def __init__(self, num_of_inputs, num_of_actions):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(num_of_inputs, 16, kernel_size=5, stride=2)  # input_shape -> 16 -> 32 -> 32
-        self.batch_norm1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.batch_norm2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.batch_norm3 = nn.BatchNorm2d(32)
-
-        self.linear1 = nn.Linear(32 * 7 * 7, 256)  # 32*7*7 -> 256 -> num_of_actions
+        self.conv1 = nn.Conv2d(num_of_inputs, 16, 8, stride=4)
+        self.conv2 = nn.Conv2d(16, 32, 3, stride=2)
+        self.linear1 = nn.Linear(32*9*9, 256)
         self.policy = nn.Linear(256, num_of_actions)
         self.value = nn.Linear(256, 1)
 
     def forward(self, x):
-        conv1_out = F.relu(self.batch_norm1(self.conv1(x)))
-        conv2_out = F.relu(self.batch_norm2(self.conv2(conv1_out)))
-        conv3_out = F.relu(self.batch_norm3(self.conv3(conv2_out)))
+        conv1_out = F.relu(self.conv1(x))
+        conv2_out = F.relu(self.conv2(conv1_out))
 
-        flattened = torch.flatten(conv3_out, start_dim=1)
-
+        flattened = torch.flatten(conv2_out, start_dim=1)  # N x 9*9*32
         linear1_out = self.linear1(flattened)
 
         policy_output = self.policy(linear1_out)
@@ -200,7 +193,7 @@ def worker(connection, stack_size):
             connection.send(state)
 
 class ParallelEnvironments:
-    def __init__(self, stack_size, number_of_processes=4):
+    def __init__(self, stack_size, number_of_processes=multiprocessing.cpu_count()):
         self.number_of_processes = number_of_processes
         self.stack_size = stack_size
 
@@ -234,7 +227,7 @@ class A2CTrainer:
     def __init__(self, params, model_path):
         self.params = params
         self.model_path = model_path
-        self.num_of_processes = 4
+        self.num_of_processes = multiprocessing.cpu_count()
         self.parallel_environments = ParallelEnvironments(self.params.stack_size,
                                                           number_of_processes=self.num_of_processes)
         self.actor_critic = ActorCritic(self.params.stack_size, get_action_space()) # 5, 4
@@ -274,7 +267,7 @@ class A2CTrainer:
             loss = policy_loss - self.params.entropy_coef * self.storage.entropies.mean() + \
                 self.params.value_loss_coef * value_loss
             loss.backward(retain_graph=True)
-            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.params.max_norm)
+            nn.utils.clip_grad_norm(self.actor_critic.parameters(), self.params.max_norm)
             self.optimizer.step()
 
             if update % 300 == 0:
@@ -295,14 +288,13 @@ class A2CTrainer:
 # 비동기적 Actor Critic
 # 각 Process별로 run
 class Worker(mp.Process):
-    def __init__(self, process_num, global_model, params, model_path):
+    def __init__(self, process_num, global_model, params):
         super().__init__()
         # Worker 변수
         self.process_num = process_num
         self.global_model = global_model
         # Model 변수
         self.params = params
-        self.model_path = model_path
         # # Environment
         # env = gym.make('CarRacing-v0')
         # ####
@@ -390,7 +382,6 @@ class Worker(mp.Process):
                 print('Process: {}. Update: {}. Loss: {}'.format(self.process_num,
                                                                  update,
                                                                  loss))
-                torch.save(self.global_model.state_dict(), self.model_path)
 
     def compute_action_log_and_entropy(self, probs, log_probs):
         values, indices = probs.max(1)
@@ -411,7 +402,7 @@ class A3CTrainer:
     def __init__(self, params, model_path):
         self.params = params
         self.model_path = model_path
-        self.num_of_processes = 4
+        self.num_of_processes = mp.cpu_count()
         self.global_model = ActorCritic(self.params.stack_size,
                                         get_action_space())
         self.global_model.share_memory()
@@ -419,7 +410,7 @@ class A3CTrainer:
     def run(self):
         processes = []
         for process_num in range(self.num_of_processes):
-            worker = Worker(process_num, self.global_model, self.params, self.model_path)
+            worker = Worker(process_num, self.global_model, self.params)
             processes.append(worker)
             worker.start()
 
