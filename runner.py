@@ -4,28 +4,32 @@ import argparse
 # from AC_ import A2CTrainer
 # from AC_ import actor_critic_inference
 # from AC_ import evaluate_actor_critic
-from Actor_Critic import A3CTrainer
-from Actor_Critic import A2CTrainer
-from Actor_Critic import actor_critic_inference
-from Actor_Critic import evaluate_actor_critic
+# from Actor_Critic import A3CTrainer
+# from Actor_Critic import A2CTrainer
+# from Actor_Critic import actor_critic_inference
+# from Actor_Critic import evaluate_actor_critic
 # from DQN_base import DQNTrainer
 # from DQN_base import dqn_inference
 # from DQN_base import evaluate_dqn
 from DQN_ import DQNTrainer
 from DQN_ import dqn_inference
 from DQN_ import evaluate_dqn
+from AC_test import A2CTrainer
+from AC_test import a2c_inference
+from AC_test import evaluate_a2c
 from params import Params
 
 # RGB 210, 160, 3 k frame uniformly sampled {2, 3, 4}
 
 ## https://github.com/AppliedDataSciencePartners/WorldModels
+##https://github.com/AGiannoutsos/car_racer_gym
 
 def get_trainer(model_type, params):
     model_path = 'models/' + model_type + '.pt'
     if model_type == 'a2c':
         return A2CTrainer(params, model_path)
-    elif model_type == 'a3c':
-        return A3CTrainer(params, model_path)
+    # elif model_type == 'a3c':
+    #     return A3CTrainer(params, model_path)
     elif model_type == 'dqn':
         return DQNTrainer(params, model_path)
     return None
@@ -40,7 +44,7 @@ def run_inference(model_type):
     if model_type == 'dqn':
         score = dqn_inference('models/' + model_type + '.pt')
     else:
-        score = actor_critic_inference(params, 'models/' + model_type + '.pt')
+        score = a2c_inference('models/' + model_type + '.pt')
 
     print('Total score: {0:.2f}'.format(score))
 
@@ -49,7 +53,7 @@ def run_evaluation(model_type):
     if model_type == 'dqn':
         score = evaluate_dqn('models/' + model_type + '.pt')
     else:
-        score = evaluate_actor_critic(params, 'models/' + model_type + '.pt')
+        score = evaluate_a2c('models/' + model_type + '.pt')
 
     print('Average reward after 100 episodes: {0:.2f}'.format(score))
 

@@ -27,12 +27,15 @@ def get_action_space():
     return len(ACTIONS)
 
 def get_actions(probs):
-    values, indices = probs.max(1)
-    actions = np.zeros((probs.size(0), 3))
-    for i in range(probs.size(0)):
-        action = ACTIONS[indices[i]]
-        actions[i] = float(values[i]) * np.array(action)
-    return actions
+    probs = np.array(probs.detach().numpy())
+    #print(probs)
+    actions = np.array([0.0, 0.0, 0.0])
+    #print(actions)
+    for i in range(len(ACTIONS)):
+        action = ACTIONS[i]
+        actions += (probs[0][i]) * np.array(action)
+    #print(actions)
+    return [actions]
 
 # openai gym의 wrapper 활용?
 class EnvironmentWrapper(gym.Wrapper):
@@ -190,7 +193,6 @@ def worker(connection, stack_size):
     ####
     env.reset()
     ####
-
     while True:
         command, data = connection.recv()
         if command == 'step':
@@ -203,7 +205,7 @@ def worker(connection, stack_size):
             connection.send(state)
 
 class ParallelEnvironments:
-    def __init__(self, stack_size, number_of_processes=4):
+    def __init__(self, stack_size, number_of_processes=1):
         self.number_of_processes = number_of_processes
         self.stack_size = stack_size
 
@@ -237,7 +239,7 @@ class A2CTrainer:
     def __init__(self, params, model_path):
         self.params = params
         self.model_path = model_path
-        self.num_of_processes = 4
+        self.num_of_processes = 1
         self.parallel_environments = ParallelEnvironments(self.params.stack_size,
                                                           number_of_processes=self.num_of_processes)
         self.actor_critic = ActorCritic(self.params.stack_size, get_action_space()) # 5, 4
@@ -412,7 +414,7 @@ class A3CTrainer:
     def __init__(self, params, model_path):
         self.params = params
         self.model_path = model_path
-        self.num_of_processes = 4
+        self.num_of_processes = 1
         self.global_model = ActorCritic(self.params.stack_size,
                                         get_action_space())
         self.global_model.share_memory()
@@ -448,7 +450,7 @@ def evaluate_actor_critic(params, path):
         score = 0
         while not done:
             probs, _, _ = model(state)
-            action = get_actions(probs)
+            action = get_actions(probs)[0]
             state, reward, done = env_wrapper.step(action)
             state = torch.Tensor([state])
             score += reward
@@ -472,7 +474,7 @@ def actor_critic_inference(params, path):
     total_score = 0
     while not done:
         probs, _, _ = model(state)
-        action = get_actions(probs)
+        action = get_actions(probs)[0]
         print(action)
         state, reward, done = env_wrapper.step(action)
         state = torch.Tensor([state])
