@@ -34,16 +34,16 @@ action: 18
     case PLAYER_A_DOWNLEFTFIRE:
 '''
 
-LEFT = [-0.8, 0.2, 0.0]
-RIGHT = [0.8, 0.2, 0.0]
+LEFT = [-1.0, 0.0, 0.0]
+RIGHT = [1.0, 0.0, 0.0]
 GAS = [0.0, 1.0, 0.0]
 BRAKE = [0.0, 0.0, 1.0]
 
 ACTIONS = [LEFT, RIGHT, GAS, BRAKE]
 
 def softmax_nan_avoid(x):
-    f = np.exp(x - np.max(x))  # shift values
-    return f / f.sum(axis=0)
+    f = torch.exp(x - torch.max(x))  # shift values
+    return f / f.sum()
 
 def get_action_space():  # action 수 반환
     return len(ACTIONS)
@@ -88,10 +88,10 @@ class A2C(nn.Module):  # DQN 모델
         flattened = torch.flatten(conv3_out, start_dim=1)
         linear1_out = self.linear1(flattened)
         policy_output = self.policy(linear1_out)
-        prob = F.log_softmax(policy_output)
-        prob = torch.exp(prob)
-        #prob = softmax_nan_avoid(policy_output)
-
+        #prob = F.log_softmax(policy_output, dim=1)
+        #prob = torch.exp(prob)
+        prob = softmax_nan_avoid(policy_output)
+        print(prob)
         return prob
 
     def v(self, x):
@@ -132,7 +132,7 @@ class EnvironmentWrapper(gym.Wrapper):
     def reset(self):  # env.reset을 전처리하여 반환
         state = self.env.reset()
         preprocessed_state = self.preprocess(state)
-        return [preprocessed_state]
+        return np.array([preprocessed_state])
 
     def step(self, action):
         total_reward = 0
@@ -143,7 +143,7 @@ class EnvironmentWrapper(gym.Wrapper):
             if done:
                 break
         preprocessed_state = self.preprocess(state)  # action 진행 후 state 전처리
-        return [preprocessed_state], total_reward, done
+        return np.array([preprocessed_state]), total_reward, done
 
     def preprocess(self, state):  # 전처리
         preprocessed_state = to_grayscale(state)  # RGB image -> grayscale image
@@ -254,14 +254,14 @@ class A2CTrainer:
         states = torch.stack(states)
         next_states = torch.stack(next_states)
         actions = torch.tensor(actions)
-        rewards = torch.tensor(rewards, device=self.device)
-        dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
-
-        td_target = rewards + self.params.discount_factor * self.model.v(next_states) * (1 - dones)
+        rewards = torch.tensor(rewards, device=self.device).view(-1, 1)
+        dones = torch.tensor(dones, device=self.device, dtype=torch.float32).view(-1, 1)
+        td_target = rewards + self.params.discount_factor * (self.model.v(next_states) * (1 - dones))
         delta = td_target - self.model.v(states)
         pi = self.model.pi(states)
         policy_a = pi.gather(1, actions)
         loss = -torch.log(policy_a) * delta.detach() + F.smooth_l1_loss(self.model.v(states), td_target.detach())
+
 
         # q_values = self.current_q_net(states).gather(1, actions)  # q(s, a)
         # next_q_values = self.target_q_net(next_states).max(1)[0]  # q'(s', a')

@@ -1,6 +1,6 @@
 {
     "skip_steps": 4,
-    "memory_capacity": 10000,
+    "memory_capacity": 1000,
     "batch_size": 32,
     "num_of_steps": 15000,
     "discount_factor": 0.999,
