@@ -1,0 +1,9 @@
+{
+    "batch_size": 32,
+    "N" : 10,
+    "M" : 1000,
+    "latent_size" : 32,
+    "epochs" : 1,
+    "steps" : 100,
+    "lr": 0.00001
+}

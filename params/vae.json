@@ -1,0 +1,8 @@
+{
+    "batch_size": 32,
+    "epochs" : 10,
+    "N" : 100,
+    "M" : 200,
+    "latent_size" : 32,
+    "lr": 0.0001
+}

@@ -4,9 +4,10 @@ import random
 import torch.nn as nn
 import torch.nn.functional as F
 import gym
-from utils.image_utils import to_grayscale, crop, save
+from utils.image_utils import to_grayscale, crop, normalize
 from collections import deque
 from torch.optim import RMSprop
+from params import Params
 
 '''
 BattleZone-v0
@@ -94,7 +95,7 @@ class EnvironmentWrapper(gym.Wrapper):
         total_reward = 0
         for i in range(self.skip_steps):
             state, reward, done, _ = self.env.step(action)                                     # 선택한 action으로 진행
-            self.env.env.viewer.window.dispatch_events()                                       # 보여주기
+            #self.env.render()
             total_reward += reward                                                             # reward 계산
             if done:                                                                            
                 break
@@ -104,6 +105,7 @@ class EnvironmentWrapper(gym.Wrapper):
     def preprocess(self, state):                                                               # 전처리
         preprocessed_state = to_grayscale(state)                                               # RGB image -> grayscale image
         preprocessed_state = crop(preprocessed_state)                                          # image crop
+        preprocessed_state = normalize(preprocessed_state)
         return preprocessed_state
 
 def evaluate_dqn(path):
@@ -222,12 +224,13 @@ class DQNTrainer:
         rewards = torch.tensor(rewards, device=self.device)
         dones = torch.tensor(dones, device=self.device, dtype=torch.float32)
 
+        self.optimizer.zero_grad()
         q_values = self.current_q_net(states).gather(1, actions)                               # q(s, a)
         next_q_values = self.target_q_net(next_states).max(1)[0]                               # q'(s', a')
 
         expected_q_values = rewards + self.params.discount_factor * next_q_values * (1 - dones)
         loss = F.smooth_l1_loss(q_values, expected_q_values.unsqueeze(1))
-        self.optimizer.zero_grad()
+
         loss.backward()                                                                        # Current Q net W Update
         self.optimizer.step()
         return loss
@@ -235,3 +238,10 @@ class DQNTrainer:
     def _update_target_q_net(self):
         self.target_q_net.load_state_dict(self.current_q_net.state_dict())                     # target network를 current q network로 갱신
 
+if __name__ == "__main__":
+    params = Params('params/' + "dqn" + '.json')
+    model_path = ('models/dqn.pt')
+    #DQNTrainer = DQNTrainer(params, model_path)
+    #DQNTrainer.run()
+    dqn_inference(model_path)
+    #evaluate_dqn(model_path)
